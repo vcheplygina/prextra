@@ -1,0 +1,59 @@
+function [beta]=lasso(X,Y,lambda)
+% function [beta]=lasso(X,Y,lambda)
+% This function minimize 
+% f(beta)=1/N*(Y-X*beta)'*(Y-X*beta)+lambda*sum(abs(beta)) 
+% with respect to beta.
+%
+% X is a matrix of explanatory variables
+% Y is a vector with the response variables
+% lambda is the weight of the Lagrange factor
+% N is the number of observations
+
+      [n,p]=size(X);      
+      X=X/sqrt(n);
+      Y=Y/sqrt(n);
+      Xtwo=2*X'*X;
+      XY=2*X'*Y;
+
+%% Improvement suggested by Sijmen de Jong
+
+      if(p>n)
+        beta=X'*pinv( X * X') * Y;
+      else
+        beta=pinv(Xtwo)*XY;
+      end
+%%
+      notfound=1;
+
+      while(notfound==1)
+        notzero=find(abs(beta)>1e-5);
+        lnz=length(notzero);
+        therest=setdiff(1:p,notzero);
+        if(length(therest>0))
+          beta(therest)=0;
+        end;
+        if(lnz==0)
+          notfound=0;
+        else
+          g=-XY(notzero)+Xtwo(notzero,notzero)*beta(notzero)+lambda*sign(beta(notzero));
+          Z=sparse(1:lnz,1:lnz,0.5./abs(beta(notzero)),lnz,lnz);
+          if(lnz<n)
+            betastep=(Xtwo(notzero,notzero)+lambda*Z)\g;
+          else
+            Ainv=diag(1./diag(2*lambda*Z));
+            betastep=Ainv*g-Ainv*(2*X(:,notzero)'*((X(:,notzero)*Ainv*2*X(:,notzero)'+eye(n))\(X(:,notzero)*(Ainv*g))));
+          end
+          tempsing=find(betastep==Inf);
+          if((max(isinf(betastep))+max(isnan(betastep)))>0)
+            newbeta=ones(size(tempbeta))*NaN;
+            notfound=0;
+          else                                    
+            newbeta=beta(notzero)-betastep;
+            if(max(abs(betastep))<1E-9)
+              notfound=0;
+            end;
+          end
+          beta(notzero)=newbeta;
+        end
+      end
+

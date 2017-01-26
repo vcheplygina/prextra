@@ -1,0 +1,98 @@
+%EMC EM Classifier using semi-supervised data
+%
+%   W = EMC(A,B,CLASSF,LABTYPE,FID)
+%   W = A*EMC([],B,CLASSF,LABTYPE,FID)
+%
+% INPUT
+%   A       Labeled dataset used for training
+%   B       Additional unlabeled dataset
+%   CLASSF  Untrained classifier (default QDC)
+%   LABTYPE Label type to be used (crisp (default) or soft)
+%   FID     File ID to write progress to (default [], see PRPROGRESS)
+%
+% OUTPUT
+%   W      Trained classifier
+%
+% DESCRIPTION
+% Using the EM algorithm the classifier CLASSF is used iteratively
+% on the joint dataset [A;B]. In each step the labels of A are reset
+% to their initial values. Initial labels in B are neglected.
+% Labels of LABTYPE 'soft' are not supported by all classifiers. 
+%
+% SEE ALSO
+% DATASETS, MAPPINGS, EMCLUST, PRPROGRESS
+
+% Copyright: R.P.W. Duin, r.p.w.duin@prtools.org
+% Faculty EWI, Delft University of Technology
+% P.O. Box 5031, 2600 GA Delft, The Netherlands
+
+function w = emc(a,b,classf,labtype)
+	if nargin < 4 | isempty(labtype), labtype = 'crisp'; end
+	if nargin < 3 | isempty(classf), classf = qdc; end	
+	if nargin < 2, b = []; end
+	if nargin < 1 | isempty(a)
+		w = mapping(mfilename,'untrained',{b,classf,labtype,fid});
+		w = setname(w,'EM CLassifier');
+		return
+	end
+
+	islabtype(a,'crisp','soft');
+	isvaldset(a,1,2); % at least 2 object per class, 2 classes
+	if isempty(b)
+		w = a*classf;
+		return
+	end
+	if size(a,2) ~= size(b,2)
+		error('Datasets should have same number of features')
+  end
+	
+  borg = setlabels(b,getnlab(b));
+	c = getsize(a,3);
+	epsilon = 1e-6;
+	change = 1;
+	nlab = getnlab(a);
+	lablist = getlablist(a);
+  p = getprior(a);
+	a = setlabels(a,nlab); 
+  a = setprior(a,p);
+	a = setlabtype(a,labtype);
+	switch labtype
+		case 'crisp'
+			lab = zeros(size(b,1),1);
+		case 'soft'
+			lab = zeros(size(b,1),c);
+	end
+	b = prdataset(+b);
+	w = a*classf;
+	
+  starttime = clock;
+  runtime = 0;
+  iter = 0;
+	while change > epsilon
+    disp(borg*w*testd)
+    if runtime > prtime
+      prwarning(2,['EM algorithme stopped by PRTIME after ' num2str(iter) ' iterations']);
+      break
+    end
+		d = b*w;
+		switch labtype
+			case 'crisp'
+				labb = d*labeld;
+				change = mean(lab ~= labb); 
+			case 'soft'
+				labb = d*classc;
+				change = mean(mean((+(labb-lab)).^2));
+			otherwise
+				error('Wrong LABTYPE given')
+		end
+		lab = labb;
+		b = setlabtype(b,labtype,lab);
+		c = [setlabtype(a,labtype); b];
+		w = c*classf;
+    runtime = etime(clock,starttime);
+    iter = iter+1;
+	end
+	
+	J = getlabels(w);
+	w = setlabels(w,lablist(J,:));
+	

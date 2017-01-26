@@ -1,0 +1,77 @@
+%LASSOC 
+%
+%      W = LASSOC(X, LAMBDA)
+%
+% Train the LASSO classifier on dataset X. LAMBDA is the regularization
+% parameter.
+
+function w = lassoc(x, lambda)
+
+mustScale=0;
+
+if (nargin < 2)
+	%prwarning(3,'Lambda set to one');
+	lambda = 1;
+end
+if (nargin < 1) | (isempty(x))
+	w = prmapping(mfilename,{lambda});
+	w = setname(w,'LASSO classifier');
+	return
+end
+
+if ~ismapping(lambda)   % train the mapping
+
+    % Unpack the dataset.
+    islabtype(x,'crisp');
+    %isvaldset(x,1,2); % at least 1 object per class, 2 classes
+    [n,k,c] = getsize(x);
+
+    % Is this necessary??
+    if mustScale
+        wsc = scalem(x,'variance');
+        x.data = x.data*wsc;
+    end
+
+    if c ~= 2  % two-class classifier:
+        error('Only a two-class classifier is implemented');
+    end
+
+    if exist('lasso')==3 % we have a own compiled mex code 
+       beta=-lasso(+x,3-2*getnlab(x),lambda);
+    else % hope that we have a modern Matlab with stats. toolbox:
+       if ~exist('lasso')
+          error('Cannot find the function lasso.m.');
+       end
+       beta=-lasso(+x,3-2*getnlab(x),'Lambda',lambda);
+    end
+
+    % now find out how sparse the result is:
+    nr = sum(abs(beta)>1.0e-8);
+
+    % and store the results:
+    if mustScale
+        W.wsc = wsc;
+    end
+
+    W.beta = beta; % the ultimate weights
+    W.nr = nr;
+    w = prmapping(mfilename,'trained',W,getlablist(x),size(x,2),c);
+    w = setname(w,'LASSO classifier');
+
+else
+    % Evaluate the classifier on new data:
+    W = getdata(lambda);
+    n = size(x,1);
+
+    % scaling and linear classifier:
+    if mustScale
+        x = x*W.wsc;
+    end
+    out = x*W.beta;
+
+    % and put it nicely in a prtools dataset:
+    w = setdat(x,sigm([-out out]),lambda);
+
+end
+
+return

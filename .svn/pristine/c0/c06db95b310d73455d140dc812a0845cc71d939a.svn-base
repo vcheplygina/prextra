@@ -1,0 +1,71 @@
+%
+%          W = RANDOMFORESTC(A,L,N)
+%
+% Train a decision forest on A, using L decision trees, each trained on
+% a bootstrapped version of dataset A. Each decison tree is using random
+% feature subsets of size N in each node.  When N=0, no feature subsets
+% are used.
+
+% C-code:  train:  101.3 s    110.4
+%          test:     0.1 s      0.1
+% matlab:  train: 1726.9 s
+%          test:   520.4 s
+function w = randomforestc(a,L,featsubset)
+
+if nargin<3
+	featsubset = 1;
+end
+if nargin<2
+	L = 50;
+end
+if nargin<1 || isempty(a)
+	w = prmapping(mfilename,{L,featsubset});
+	w = setname(w,'Random forest (L=%d)',L);
+	return
+end
+
+if ~ismapping(L)
+	isvaldfile(a,2,2); % at least 2 obj/class, 2 classes
+	opt = [];
+	[n,dim,opt.K] = getsize(a);
+	opt.featsubset = featsubset;
+	v = cell(L,1);
+	for i=1:L
+		[x,z] = gendat(a);
+        if exist('decisiontree')==3
+            v{i} = decisiontree(+x,getnlab(x),opt.K,opt.featsubset);
+        else
+        prwarning(1,'Slow Matlab code used for training Randomforest classifier')
+    		v{i} = tree_train(+x,getnlab(x),opt);
+        end
+	end
+	w = prmapping(mfilename,'trained',v,getlablist(a),dim,opt.K);
+	w = setname(w,'Random forest (L=%d)',L);
+else
+	v = getdata(L);
+	n = size(a,1);  % nr objects
+	K = size(L,2);  % nr of classes
+	nrv = length(v); % nr of trees
+    out = zeros(n,K);
+    if exist('decisiontree')==3 && false
+        for j=1:nrv
+            I = decisiontree(v{j},+a);
+            out = out + accumarray([(1:n)' I],ones(n,1),[n K]);
+        end
+    else
+        % the old fashioned slow Matlab code
+        prwarning(1,'Slow Matlab code used for testing Randomforest classifier')
+        for i=1:n
+            x = +a(i,:);
+            for j=1:nrv
+                I = tree_eval(v{j},x);
+                out(i,I) = out(i,I)+1;
+            end
+        end
+        out = out./repmat(sum(out,2),1,K);
+    end
+	w = setdat(a,out,L);
+end
+return
+	
+	

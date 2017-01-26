@@ -1,0 +1,384 @@
+/* try to train a decision tree */
+/* I assume I have a dataset X, and labels y. Due to implementation
+ * simplification, I ask the number of classes as well (it may be that
+ * not all classes are available in y). I assume that y contains
+ * integers, from 1,2,...,K.  Also the size of the feature subset F
+ * should be given. */
+
+/* The data matrix should be nxd, where n is the number of objects, and
+ * d is the number of dimensions. */
+
+#include <stdlib.h>
+#include <stdio.h>
+#include <mex.h>
+
+/* first the tree structure */
+typedef struct dtree {
+	int class;                    /* predicted class */
+	int feat;                     /* feature to split */
+	double thres;                 /* threshold */
+	struct dtree *left, *right;   /* children */
+} dtree;
+
+/* then the data structure for sorting */
+typedef struct obj {
+	double val;
+	int class;
+	int idx;
+} obj;
+
+/* general variables (ok, global vars are bad, ok) */
+double *x;     /* data */
+double *y;     /* labels */
+size_t N,D;    /* nr objs, nr feats*/
+int K,F;       /* nr classes, nr subspaces */
+int nrnodes;   /* the size of the tree */
+double *tmp_p; /* for gini */
+int storeindex;/* for storing tree */
+
+/* All the stuff for sorting */
+int compare_objs(const void *a,const void *b)
+{
+	obj *obj_a = (obj *)a;
+	obj *obj_b = (obj *)b;
+
+	if (obj_a->val > obj_b->val)
+		return 1;
+	else
+		return -1;
+}
+int compare_doubles(const void *a,const void *b)
+{
+	double *obj_a = (double *)a;
+	double *obj_b = (double *)b;
+
+	if (obj_a > obj_b)
+		return 1;
+	else
+		return -1;
+}
+
+/* Gini */
+double gini(int *I)
+{
+	int i;
+	double out;
+
+	/* initialize to zero */
+	for (i=0;i<K;i++)
+		tmp_p[i] = 0;
+	/* count the occurance of each class */
+	/* index vector starts at 1, the class numbering as well... */
+	for (i=0;i<I[0];i++)
+		tmp_p[(int)y[I[i+1]]-1] +=1;
+	/* normalize and compute gini */
+	out = 0;
+	for (i=0;i<K;i++)
+		out = out + tmp_p[i]*(1-tmp_p[i]/I[0])/I[0];
+
+	return out;
+}
+
+/* make a tree */
+dtree *tree_train(int *I)
+{
+	double err,besterr;
+	dtree *out;
+	int *fss;
+	obj *tmp;
+	int i,j,k;
+	int bestsplit;
+	int *Ileft, *Iright, *Ileftbest, *Irightbest;
+
+	/* make the node */
+	out = (dtree *)malloc(sizeof(dtree));
+	nrnodes +=1;
+/* printf("Make NODE %d!\n",nrnodes); */
+/* printf("%d objects in this node\n",I[0]); */
+
+	/* is it good enough? */
+	err = gini(I);
+/* printf("   gini = %f\n",err); */
+	if (err==0)
+	{
+		/* leave is perfectly classified: return this */
+		out->class = y[I[1]];
+		out->feat = 0;
+		out->thres = 0;
+		out->left = NULL;
+		out->right = NULL;
+/* printf("   Node %d is leaf. Done\n",nrnodes); */
+		return out;
+	}
+	else
+	{
+		/* store illegal class number to show it is a branch */
+		out->class = -1;
+		/* what features to use? */
+		fss = (int *)malloc(D*sizeof(int));
+		if (F>0) {
+			/* randomly permute feature indices */
+			tmp = (obj *)malloc(D*sizeof(obj));
+			for (i=0;i<D;i++)
+			{
+				tmp[i].val = rand();
+				tmp[i].idx = i;
+				/* printf("tmp[%d]=%f,%d\n",i,tmp[i].val,tmp[i].idx); */
+			}
+			qsort(tmp,D,sizeof(tmp[0]),compare_objs);
+			for (i=0;i<D;i++)
+			{
+				fss[i] = tmp[i].idx;
+				/* printf("fss[%d]=%d\n",i,fss[i]); */
+			}
+			free(tmp);
+		}
+		else
+		{
+			for (i=0;i<D;i++)
+			{
+				fss[i] = i;
+				/* printf("fss[%d]=%d\n",i,fss[i]); */
+			}
+			F = D;
+		}
+
+		/* check each feature separately: */
+		besterr = 1e100;
+		tmp = (obj *)malloc(I[0]*sizeof(obj));
+		Ileft = (int *)malloc((I[0]+1)*sizeof(int));
+		Iright = (int *)malloc((I[0]+1)*sizeof(int));
+		Ileftbest = (int *)malloc((I[0]+1)*sizeof(int));
+		Irightbest = (int *)malloc((I[0]+1)*sizeof(int));
+		for (i=0;i<F;i++) {
+/* printf("Try feature %d:\n",fss[i]); */
+			/* sort the data along feature fss[i] */
+			for (j=0;j<I[0];j++){
+				tmp[j].val = x[fss[i]*N+I[j+1]];
+				tmp[j].class = y[j];
+				tmp[j].idx = I[j+1];
+				/* printf("   tmp[%d] = %f, idx=%d\n",j,tmp[j].val,tmp[j].idx); */
+			}
+			qsort((void *)tmp,I[0],sizeof(tmp[0]),compare_objs);
+/* for (j=0;j<I[0];j++) printf("   -> tmp[%d] = %f, idx=%d\n",j,tmp[j].val,tmp[j].idx); */
+			/* make indices for the split */
+			for (j=0;j<I[0];j++)
+			{
+				Ileft[j+1] = tmp[j].idx; 
+				Iright[I[0]-j] = tmp[j].idx;
+			}
+/* for (k=1;k<=I[0];k++) printf("  Ileft[%d] = %d \n",k,Ileft[k]); */
+/* for (k=1;k<=I[0];k++) printf("  Iright[%d] = %d \n",k,Iright[k]); */
+/* if (nrnodes==3) return out; */
+			/* run over all possible splits */
+			for (j=1;j<I[0];j++)
+			{
+/* printf("   split %d ",j); */
+				Ileft[0]=j;  /* redefine the length of vector Ileft */
+/* for (k=1;k<=j;k++) printf("  Il[%d] = %d ",k,Ileft[k]); */
+/* printf(" -> gini left = %f\n",gini(Ileft)); */
+				Iright[0]=I[0]-j;
+/* for (k=1;k<=I[0]-j;k++) printf("  Ir[%d] = %d ",k,Iright[k]); */
+/* printf("    gini right = %f\n",gini(Iright)); */
+				err = j*gini(Ileft) + (I[0]-j)*gini(Iright);
+/* printf(" give err %f\n",err); */
+				/* is this good? */
+				if (err<besterr) {
+/* printf("   We have a better result! (%f<%f)\n",err,besterr); */
+/* printf("   Feature %d at %d ",fss[i],j); */
+					besterr = err;
+					bestsplit = j;
+					out->feat = fss[i];
+					out->thres = (tmp[j].val + tmp[j-1].val)/2;
+/* printf(" thres = %f\n",out->thres); */
+					for (k=0;k<=j;k++)
+						Ileftbest[k] = Ileft[k];
+					Ileftbest[0] = j;
+					for (k=0;k<=I[0]-j;k++)
+						Irightbest[k] = Iright[k];
+					Irightbest[0] = I[0]-j;
+				}
+
+			}
+
+		}
+/* printf("Finally, we use feature %d on split %d, threshold %f\n",
+		out->feat,bestsplit,out->thres); */
+/*printf("Left objects:\n");
+for (k=1;k<=Ileftbest[0];k++)
+	printf("   Ileft[%d] = %d\n",k,Ileftbest[k]);
+printf("Right objects:\n");
+for (k=1;k<=Irightbest[0];k++)
+	printf("   Iright[%d] = %d\n",k,Irightbest[k]);*/
+
+		/* now find the children */
+		out->left = tree_train(Ileftbest);
+		out->right = tree_train(Irightbest);
+			
+
+		free(Ileft);
+		free(Iright);
+		free(Ileftbest);
+		free(Irightbest);
+		free(tmp);
+		free(fss);
+	}
+	return out;
+}
+
+/* Store the tree in a matrix */
+/* Order of the variables: 
+ * 1. class
+ * 2. feature
+ * 3. threshold
+ * 4. left branch index
+ * 5. right branch index */
+void tree_encode(dtree *tree,double *ptr)
+{
+	int thisindex = storeindex;
+
+/* printf("Store %d \n",thisindex); */
+
+	if (tree->class<0)  /* it is branching */
+	{
+/* printf("     : split feat %d at %f\n",tree->feat,tree->thres); */
+		*(ptr+5*thisindex)    = -1;  /* encode splitting */
+		*(ptr+5*thisindex+1) = tree->feat;
+		*(ptr+5*thisindex+2) = tree->thres;
+		storeindex += 1;
+		*(ptr+5*thisindex+3) = storeindex+1; /* Matlab indexing...*/
+		tree_encode(tree->left,ptr);
+		storeindex += 1;
+		*(ptr+5*thisindex+4) = storeindex+1;
+		tree_encode(tree->right,ptr);
+	}
+	else
+	{
+/* printf("     : class %d\n",tree->class); */
+		*(ptr+5*thisindex) = tree->class;
+		*(ptr+5*thisindex+1) = 0;
+		*(ptr+5*thisindex+2) = 0;
+		*(ptr+5*thisindex+3) = 0;
+		*(ptr+5*thisindex+4) = 0;
+	}
+}
+
+void destroy_tree(dtree *tree)
+{
+	if (tree->class<0)
+	{
+		destroy_tree(tree->left);
+		destroy_tree(tree->right);
+		free(tree);
+		/* printf("removed branch\n"); */
+	}
+	else
+	{
+		free(tree);
+		/* printf("removed leave\n"); */
+	}
+}
+
+int classify_data(double *T, int idx, int obj)
+{
+	int k;
+	int feat;
+	double thres;
+
+/*	printf("Obj x(%d): [",obj);
+	for (k=0;k<D;k++)
+		printf("%f, ",x[obj+k*N]);
+	printf("]\n"); */
+
+	if (*(T+5*idx)<0) /* branching */
+	{
+		feat = (int)(*(T+5*idx+1));
+		thres = *(T+5*idx+2);
+		/* printf(" is x[%d]=%f < %f? (x=%f)\n",feat, x[obj+feat*N],thres); */
+		if (x[obj+feat*N]<thres)
+		{
+			/* printf("left branch\n"); */
+			return classify_data(T,*(T+5*idx+3)-1,obj);
+		}
+		else
+		{
+			/* printf("right branch\n"); */
+			return classify_data(T,*(T+5*idx+4)-1,obj);
+		}
+	}
+	else
+		return *(T+5*idx);
+}
+
+
+
+/* GO! */
+void mexFunction(int nlhs, mxArray *plhs[],
+                 int nrhs, const mxArray *prhs[])
+{
+	int i;
+	int *I;     /* index vector */
+	dtree *tree;
+	double *T;
+	double *ptr;
+
+	/* Four inputs: train the tree */
+	/* We require four inputs, x,y, K and F */
+	if (nrhs==4) {
+		/* Get the input and check stuff */
+/* printf("get input and check\n"); */
+		x = mxGetPr(prhs[0]);
+		N = mxGetM(prhs[0]);
+		D = mxGetN(prhs[0]);
+		y = mxGetPr(prhs[1]);
+		if (mxGetM(prhs[1])!=N) {
+			printf("ERROR: Size of Y does not fit with X.\n");
+			return;
+		}
+		K = (int)(mxGetPr(prhs[2])[0]);
+		F = (int)(mxGetPr(prhs[3])[0]);
+/* printf("N=%d, D=%d, K=%d, F=%d\n",N,D,K,F); */
+		/* allocate */
+		tmp_p = (double *)malloc(K*sizeof(double)); /* for gini */
+
+		/* start the tree with all data: */
+		I = (int *)malloc((N+1)*sizeof(int));
+		I[0] = N;
+		for (i=0;i<N;i++) I[i+1] = i;
+
+		/* make the tree  */
+		nrnodes = 0;
+		tree = tree_train(I);
+
+		/* store results */
+/* printf("\n\n\nStore results, of %d nodes\n",nrnodes); */
+		plhs[0] = mxCreateNumericMatrix(5,nrnodes,mxDOUBLE_CLASS,mxREAL);
+		storeindex = 0;
+		tree_encode(tree,mxGetPr(plhs[0]));
+
+		/* clean up */
+		destroy_tree(tree);
+		free(I);
+		free(tmp_p);
+	}
+	/* Two inputs: evaluate the tree */
+	/* We require the encoded tree T and inputs x */
+	else if (nrhs==2) {
+		T = mxGetPr(prhs[0]);
+		nrnodes = mxGetN(prhs[0]);
+		x = mxGetPr(prhs[1]);
+		N = mxGetM(prhs[1]);
+		D = mxGetN(prhs[1]);
+
+		plhs[0] = mxCreateNumericMatrix(N,1,mxDOUBLE_CLASS,mxREAL);
+		ptr = mxGetPr(plhs[0]);
+		for (i=0;i<N;i++) *(ptr+i) = classify_data(T,0,i);
+	}
+	else
+	{
+		printf("ERROR: only 2 or 4 inputs allowed!\n");
+		return;
+	}
+}
+
+
